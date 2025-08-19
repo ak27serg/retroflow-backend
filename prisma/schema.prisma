@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id            String        @id @default(uuid())
+  inviteCode    String        @unique @map("invite_code") @db.VarChar(8)
+  hostId        String        @map("host_id")
+  title         String        @default("Retrospective") @db.VarChar(255)
+  currentPhase  SessionPhase  @default(SETUP) @map("current_phase")
+  timerDuration Int           @default(600) @map("timer_duration")
+  timerEndTime  DateTime?     @map("timer_end_time")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  settings      Json          @default("{}")
+  groups        Group[]
+  participants  Participant[]
+  responses     Response[]
+  votes         Vote[]
+
+  @@map("sessions")
+}
+
+model Participant {
+  id          String     @id @default(uuid())
+  sessionId   String     @map("session_id")
+  displayName String     @map("display_name") @db.VarChar(50)
+  avatarId    String     @map("avatar_id") @db.VarChar(20)
+  isHost      Boolean    @default(false) @map("is_host")
+  joinedAt    DateTime   @default(now()) @map("joined_at")
+  lastActive  DateTime   @default(now()) @map("last_active")
+  socketId    String?    @map("socket_id") @db.VarChar(50)
+  session     Session    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  responses   Response[]
+  votes       Vote[]
+
+  @@index([sessionId])
+  @@map("participants")
+}
+
+model Response {
+  id            String           @id @default(uuid())
+  sessionId     String           @map("session_id")
+  participantId String           @map("participant_id")
+  category      ResponseCategory
+  content       String
+  groupId       String?          @map("group_id")
+  positionX     Int              @default(0) @map("position_x")
+  positionY     Int              @default(0) @map("position_y")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  group         Group?           @relation(fields: [groupId], references: [id])
+  participant   Participant      @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  session       Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, participantId])
+  @@map("responses")
+}
+
+model Group {
+  id        String     @id @default(uuid())
+  sessionId String     @map("session_id")
+  label     String?    @db.VarChar(100)
+  color     String     @default("#3B82F6") @db.VarChar(7)
+  positionX Int        @default(0) @map("position_x")
+  positionY Int        @default(0) @map("position_y")
+  voteCount Int        @default(0) @map("vote_count")
+  createdAt DateTime   @default(now()) @map("created_at")
+  session   Session    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  responses Response[]
+  votes     Vote[]
+
+  @@map("groups")
+}
+
+model Vote {
+  id            String      @id @default(uuid())
+  sessionId     String      @map("session_id")
+  participantId String      @map("participant_id")
+  groupId       String      @map("group_id")
+  voteCount     Int         @default(1) @map("vote_count")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  group         Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  session       Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([participantId, groupId])
+  @@index([sessionId, participantId])
+  @@map("votes")
+}
+
+enum SessionPhase {
+  SETUP
+  INPUT
+  GROUPING
+  VOTING
+  RESULTS
+}
+
+enum ResponseCategory {
+  WENT_WELL
+  DIDNT_GO_WELL
+}
