@@ -15,11 +15,15 @@ import { participantRoutes } from './routes/participantRoutes';
 
 dotenv.config();
 
+const allowedOrigins = process.env.CORS_ORIGIN 
+  ? [process.env.CORS_ORIGIN]
+  : ["http://localhost:3003", "http://localhost:3000", "http://localhost:3002", "http://192.168.1.162:3003", "http://192.168.1.162:3002"];
+
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3003", "http://localhost:3000", "http://localhost:3002", "http://192.168.1.162:3003", "http://192.168.1.162:3002"],
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
   }
@@ -50,7 +54,7 @@ async function startServer() {
     }));
 
     app.use(cors({
-      origin: ["http://localhost:3003", "http://localhost:3000", "http://localhost:3002", "http://192.168.1.162:3003", "http://192.168.1.162:3002"],
+      origin: allowedOrigins,
       methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
       credentials: true
