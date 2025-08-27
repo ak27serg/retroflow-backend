@@ -10,7 +10,7 @@ const createSessionSchema = z.object({
 });
 
 const joinSessionSchema = z.object({
-  inviteCode: z.string().length(8),
+  inviteCode: z.string().length(4),
   displayName: z.string().min(1).max(50),
   avatarId: z.string().min(1).max(20)
 });
@@ -18,7 +18,7 @@ const joinSessionSchema = z.object({
 function generateInviteCode(): string {
   const chars = 'ABCDEFGHIJKLMNPQRSTUVWXYZ123456789';
   let result = '';
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 4; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
@@ -195,7 +195,7 @@ export function sessionRoutes(prisma: PrismaClient) {
   router.get('/invite/:inviteCode', async (req, res) => {
     try {
       const { inviteCode } = z.object({
-        inviteCode: z.string().length(8)
+        inviteCode: z.string().length(4)
       }).parse(req.params);
 
       const session = await prisma.session.findUnique({
