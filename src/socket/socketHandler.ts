@@ -41,6 +41,15 @@ const removeConnectionSchema = z.object({
   connectionId: z.string().uuid(),
 });
 
+const presentationSchema = z.object({
+  sessionId: z.string().uuid(),
+});
+
+const navigatePresentationSchema = z.object({
+  sessionId: z.string().uuid(),
+  itemIndex: z.number().int().min(0),
+});
+
 export function setupSocketHandlers(
   io: Server, 
   prisma: PrismaClient, 
@@ -481,6 +490,83 @@ export function setupSocketHandlers(
       } catch (error) {
         console.error('Cast vote error:', error);
         socket.emit('error', { message: 'Failed to cast vote' });
+      }
+    });
+
+    socket.on('start_presentation', async (data) => {
+      try {
+        console.log('Received start_presentation event:', data);
+        const { sessionId } = presentationSchema.parse(data);
+        
+        // Verify host permissions
+        const participant = await prisma.participant.findFirst({
+          where: { socketId: socket.id, sessionId, isHost: true }
+        });
+
+        if (!participant) {
+          console.log('Unauthorized presentation start attempt by socket:', socket.id);
+          socket.emit('error', { message: 'Unauthorized to start presentation' });
+          return;
+        }
+
+        console.log('Broadcasting presentation_started to session:', sessionId);
+        
+        // Debug: Check which sockets are in the room
+        const socketsInRoom = await io.in(`session:${sessionId}`).fetchSockets();
+        console.log('Sockets in room session:' + sessionId + ':', socketsInRoom.map(s => s.id));
+        
+        // Broadcast presentation start to all participants in the session
+        io.to(`session:${sessionId}`).emit('presentation_started');
+
+      } catch (error) {
+        console.error('Start presentation error:', error);
+        socket.emit('error', { message: 'Failed to start presentation' });
+      }
+    });
+
+    socket.on('end_presentation', async (data) => {
+      try {
+        const { sessionId } = presentationSchema.parse(data);
+        
+        // Verify host permissions
+        const participant = await prisma.participant.findFirst({
+          where: { socketId: socket.id, sessionId, isHost: true }
+        });
+
+        if (!participant) {
+          socket.emit('error', { message: 'Unauthorized to end presentation' });
+          return;
+        }
+
+        // Broadcast presentation end to all participants in the session
+        io.to(`session:${sessionId}`).emit('presentation_ended');
+
+      } catch (error) {
+        console.error('End presentation error:', error);
+        socket.emit('error', { message: 'Failed to end presentation' });
+      }
+    });
+
+    socket.on('navigate_presentation', async (data) => {
+      try {
+        const { sessionId, itemIndex } = navigatePresentationSchema.parse(data);
+        
+        // Verify host permissions
+        const participant = await prisma.participant.findFirst({
+          where: { socketId: socket.id, sessionId, isHost: true }
+        });
+
+        if (!participant) {
+          socket.emit('error', { message: 'Unauthorized to navigate presentation' });
+          return;
+        }
+
+        // Broadcast navigation to all participants in the session
+        io.to(`session:${sessionId}`).emit('presentation_navigate', { itemIndex });
+
+      } catch (error) {
+        console.error('Navigate presentation error:', error);
+        socket.emit('error', { message: 'Failed to navigate presentation' });
       }
     });
 
