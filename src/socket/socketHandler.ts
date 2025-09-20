@@ -12,6 +12,7 @@ const changePhaseSchema = z.object({
   sessionId: z.string().uuid(),
   phase: z.nativeEnum(SessionPhase),
   timerDuration: z.number().optional(),
+  stopTimer: z.boolean().optional(),
 });
 
 const responseSchema = z.object({
@@ -107,7 +108,7 @@ export function setupSocketHandlers(
 
     socket.on('change_phase', async (data) => {
       try {
-        const { sessionId, phase, timerDuration } = changePhaseSchema.parse(data);
+        const { sessionId, phase, timerDuration, stopTimer } = changePhaseSchema.parse(data);
         
         const session = await prisma.session.findUnique({
           where: { id: sessionId },
@@ -119,22 +120,29 @@ export function setupSocketHandlers(
           return;
         }
 
-        const timerEndTime = timerDuration 
-          ? new Date(Date.now() + timerDuration * 1000)
-          : null;
+        let timerEndTime = null;
+        
+        if (stopTimer) {
+          // Explicitly stop the timer
+          timerEndTime = null;
+        } else if (timerDuration) {
+          // Set a new timer
+          timerEndTime = new Date(Date.now() + timerDuration * 1000);
+        }
+        // If neither stopTimer nor timerDuration is specified, keep existing timer
 
         await prisma.session.update({
           where: { id: sessionId },
           data: { 
             currentPhase: phase,
             timerDuration: timerDuration || session.timerDuration,
-            timerEndTime
+            timerEndTime: stopTimer ? null : timerEndTime
           }
         });
 
         io.to(`session:${sessionId}`).emit('phase_changed', { 
           phase,
-          timerEndTime: timerEndTime?.toISOString()
+          timerEndTime: timerEndTime?.toISOString() || null
         });
 
       } catch (error) {
@@ -143,28 +151,41 @@ export function setupSocketHandlers(
       }
     });
 
-    socket.on('typing_indicator', async (data) => {
+    socket.on('typing_start', async (data) => {
       try {
-        const { sessionId, participantId, isTyping } = z.object({
+        const { sessionId, participantId } = z.object({
           sessionId: z.string().uuid(),
-          participantId: z.string().uuid(),
-          isTyping: z.boolean()
+          participantId: z.string().uuid()
         }).parse(data);
 
-        socket.to(`session:${sessionId}`).emit('participant_typing', {
-          participantId,
-          isTyping
+        socket.to(`session:${sessionId}`).emit('participant_typing_start', {
+          participantId
         });
 
         const key = `typing:${sessionId}:${participantId}`;
-        if (isTyping) {
-          await redis.setEx(key, 10, socket.id);
-        } else {
-          await redis.del(key);
-        }
+        await redis.setEx(key, 10, socket.id);
 
       } catch (error) {
-        console.error('Typing indicator error:', error);
+        console.error('Typing start error:', error);
+      }
+    });
+
+    socket.on('typing_stop', async (data) => {
+      try {
+        const { sessionId, participantId } = z.object({
+          sessionId: z.string().uuid(),
+          participantId: z.string().uuid()
+        }).parse(data);
+
+        socket.to(`session:${sessionId}`).emit('participant_typing_stop', {
+          participantId
+        });
+
+        const key = `typing:${sessionId}:${participantId}`;
+        await redis.del(key);
+
+      } catch (error) {
+        console.error('Typing stop error:', error);
       }
     });
 
