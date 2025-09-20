@@ -284,6 +284,8 @@ export function setupSocketHandlers(
 
     socket.on('create_group', async (data) => {
       try {
+        console.log('Received create_group request:', data);
+        
         const { sessionId, label, color, responseIds } = z.object({
           sessionId: z.string().uuid(),
           label: z.string().min(1).max(100),
@@ -332,7 +334,11 @@ export function setupSocketHandlers(
 
       } catch (error) {
         console.error('Create group error:', error);
-        socket.emit('error', { message: 'Failed to create group' });
+        if (error instanceof z.ZodError) {
+          socket.emit('error', { message: `Invalid group data: ${error.errors.map(e => e.message).join(', ')}` });
+        } else {
+          socket.emit('error', { message: 'Failed to create group' });
+        }
       }
     });
 
