@@ -30,6 +30,17 @@ const voteSchema = z.object({
   voteCount: z.number().min(0).max(4),
 });
 
+const createConnectionSchema = z.object({
+  sessionId: z.string().uuid(),
+  fromResponseId: z.string().uuid(),
+  toResponseId: z.string().uuid(),
+});
+
+const removeConnectionSchema = z.object({
+  sessionId: z.string().uuid(),
+  connectionId: z.string().uuid(),
+});
+
 export function setupSocketHandlers(
   io: Server, 
   prisma: PrismaClient, 
@@ -278,6 +289,83 @@ export function setupSocketHandlers(
 
 
 
+
+    socket.on('create_connection', async (data) => {
+      try {
+        const { sessionId, fromResponseId, toResponseId } = createConnectionSchema.parse(data);
+
+        // Check if connection already exists
+        const existingConnection = await prisma.connection.findFirst({
+          where: {
+            sessionId,
+            OR: [
+              { fromResponseId, toResponseId },
+              { fromResponseId: toResponseId, toResponseId: fromResponseId }
+            ]
+          }
+        });
+
+        if (existingConnection) {
+          socket.emit('error', { message: 'Connection already exists' });
+          return;
+        }
+
+        // Verify both responses exist and belong to the session
+        const responses = await prisma.response.findMany({
+          where: {
+            id: { in: [fromResponseId, toResponseId] },
+            sessionId
+          }
+        });
+
+        if (responses.length !== 2) {
+          socket.emit('error', { message: 'Invalid responses for connection' });
+          return;
+        }
+
+        // Create the connection
+        const connection = await prisma.connection.create({
+          data: {
+            sessionId,
+            fromResponseId,
+            toResponseId
+          }
+        });
+
+        io.to(`session:${sessionId}`).emit('connection_created', connection);
+
+      } catch (error) {
+        console.error('Create connection error:', error);
+        socket.emit('error', { message: 'Failed to create connection' });
+      }
+    });
+
+    socket.on('remove_connection', async (data) => {
+      try {
+        const { sessionId, connectionId } = removeConnectionSchema.parse(data);
+
+        // Verify connection exists and belongs to session
+        const connection = await prisma.connection.findFirst({
+          where: { id: connectionId, sessionId }
+        });
+
+        if (!connection) {
+          socket.emit('error', { message: 'Connection not found' });
+          return;
+        }
+
+        // Remove the connection
+        await prisma.connection.delete({
+          where: { id: connectionId }
+        });
+
+        io.to(`session:${sessionId}`).emit('connection_removed', { connectionId });
+
+      } catch (error) {
+        console.error('Remove connection error:', error);
+        socket.emit('error', { message: 'Failed to remove connection' });
+      }
+    });
 
     socket.on('cast_vote', async (data) => {
       try {

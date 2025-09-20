@@ -18,6 +18,7 @@ model Session {
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
   settings      Json          @default("{}")
+  connections   Connection[]
   groups        Group[]
   participants  Participant[]
   responses     Response[]
@@ -44,19 +45,21 @@ model Participant {
 }
 
 model Response {
-  id            String           @id @default(uuid())
-  sessionId     String           @map("session_id")
-  participantId String           @map("participant_id")
-  category      ResponseCategory
-  content       String
-  groupId       String?          @map("group_id")
-  positionX     Int              @default(0) @map("position_x")
-  positionY     Int              @default(0) @map("position_y")
-  createdAt     DateTime         @default(now()) @map("created_at")
-  updatedAt     DateTime         @updatedAt @map("updated_at")
-  group         Group?           @relation(fields: [groupId], references: [id])
-  participant   Participant      @relation(fields: [participantId], references: [id], onDelete: Cascade)
-  session       Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id                String           @id @default(uuid())
+  sessionId         String           @map("session_id")
+  participantId     String           @map("participant_id")
+  category          ResponseCategory
+  content           String
+  groupId           String?          @map("group_id")
+  positionX         Int              @default(0) @map("position_x")
+  positionY         Int              @default(0) @map("position_y")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  group             Group?           @relation(fields: [groupId], references: [id])
+  participant       Participant      @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  session           Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  connectionsFrom   Connection[]     @relation("FromResponse")
+  connectionsTo     Connection[]     @relation("ToResponse")
 
   @@index([sessionId, participantId])
   @@map("responses")
@@ -76,6 +79,21 @@ model Group {
   votes     Vote[]
 
   @@map("groups")
+}
+
+model Connection {
+  id             String   @id @default(uuid())
+  sessionId      String   @map("session_id")
+  fromResponseId String   @map("from_response_id")
+  toResponseId   String   @map("to_response_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  session        Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  fromResponse   Response @relation("FromResponse", fields: [fromResponseId], references: [id], onDelete: Cascade)
+  toResponse     Response @relation("ToResponse", fields: [toResponseId], references: [id], onDelete: Cascade)
+
+  @@unique([fromResponseId, toResponseId])
+  @@index([sessionId])
+  @@map("connections")
 }
 
 model Vote {

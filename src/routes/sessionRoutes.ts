@@ -174,6 +174,7 @@ export function sessionRoutes(prisma: PrismaClient) {
               }
             }
           },
+          connections: true,
           groups: {
             include: {
               responses: {
