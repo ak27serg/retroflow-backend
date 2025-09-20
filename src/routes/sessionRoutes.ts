@@ -2,17 +2,18 @@ import { Router } from 'express';
 import { PrismaClient, SessionPhase } from '@prisma/client';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import { generateRandomName, getRandomAvailableAvatar } from '../utils/avatars';
 
 const createSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  hostName: z.string().min(1).max(50),
-  hostAvatar: z.string().min(1).max(20)
+  hostName: z.string().min(1).max(50).optional(),
+  hostAvatar: z.string().min(1).max(20).optional()
 });
 
 const joinSessionSchema = z.object({
   inviteCode: z.string().length(4),
-  displayName: z.string().min(1).max(50),
-  avatarId: z.string().min(1).max(20)
+  displayName: z.string().min(1).max(50).optional(),
+  avatarId: z.string().min(1).max(20).optional()
 });
 
 function generateInviteCode(): string {
@@ -35,6 +36,10 @@ export function sessionRoutes(prisma: PrismaClient) {
       const hostId = uuidv4();
       const inviteCode = generateInviteCode();
 
+      // Generate random name and avatar if not provided
+      const finalHostName = hostName || generateRandomName();
+      const finalHostAvatar = hostAvatar || getRandomAvailableAvatar([]);
+
       const session = await prisma.session.create({
         data: {
           id: sessionId,
@@ -44,8 +49,8 @@ export function sessionRoutes(prisma: PrismaClient) {
           participants: {
             create: {
               id: hostId,
-              displayName: hostName,
-              avatarId: hostAvatar,
+              displayName: finalHostName,
+              avatarId: finalHostAvatar,
               isHost: true
             }
           }
@@ -86,19 +91,40 @@ export function sessionRoutes(prisma: PrismaClient) {
         return res.status(400).json({ error: 'Session is full' });
       }
 
-      const existingParticipant = session.participants.find(
-        p => p.displayName.toLowerCase() === displayName.toLowerCase()
-      );
+      // Get used avatars and names
+      const usedAvatars = session.participants.map(p => p.avatarId);
+      const usedNames = session.participants.map(p => p.displayName.toLowerCase());
 
-      if (existingParticipant) {
+      // Generate random name and avatar if not provided
+      let finalDisplayName = displayName;
+      let finalAvatarId = avatarId;
+
+      if (!finalDisplayName) {
+        // Generate a unique random name
+        do {
+          finalDisplayName = generateRandomName();
+        } while (usedNames.includes(finalDisplayName.toLowerCase()));
+      }
+
+      if (!finalAvatarId) {
+        finalAvatarId = getRandomAvailableAvatar(usedAvatars);
+      }
+
+      // Check for duplicate name
+      if (usedNames.includes(finalDisplayName.toLowerCase())) {
         return res.status(400).json({ error: 'Display name already taken' });
+      }
+
+      // Check for duplicate avatar
+      if (usedAvatars.includes(finalAvatarId)) {
+        return res.status(400).json({ error: 'Avatar already taken' });
       }
 
       const participant = await prisma.participant.create({
         data: {
           sessionId: session.id,
-          displayName,
-          avatarId,
+          displayName: finalDisplayName,
+          avatarId: finalAvatarId,
           isHost: false
         }
       });
@@ -205,6 +231,12 @@ export function sessionRoutes(prisma: PrismaClient) {
           title: true,
           currentPhase: true,
           createdAt: true,
+          participants: {
+            select: {
+              avatarId: true,
+              displayName: true
+            }
+          },
           _count: {
             select: { participants: true }
           }
@@ -220,6 +252,7 @@ export function sessionRoutes(prisma: PrismaClient) {
         title: session.title,
         currentPhase: session.currentPhase,
         participantCount: session._count.participants,
+        participants: session.participants,
         createdAt: session.createdAt
       });
 
