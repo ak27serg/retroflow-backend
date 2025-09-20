@@ -22,13 +22,6 @@ const responseSchema = z.object({
   category: z.enum(['WENT_WELL', 'DIDNT_GO_WELL']),
 });
 
-const dragResponseSchema = z.object({
-  sessionId: z.string().uuid(),
-  responseId: z.string().uuid(),
-  x: z.number(),
-  y: z.number(),
-  groupId: z.string().uuid().nullable(),
-});
 
 const voteSchema = z.object({
   sessionId: z.string().uuid(),
@@ -282,155 +275,9 @@ export function setupSocketHandlers(
       }
     });
 
-    socket.on('create_group', async (data) => {
-      try {
-        console.log('Received create_group request:', data);
-        
-        const { sessionId, label, color, responseIds } = z.object({
-          sessionId: z.string().uuid(),
-          label: z.string().min(1).max(100),
-          color: z.string().min(1),
-          responseIds: z.array(z.string().uuid()).optional()
-        }).parse(data);
 
-        const group = await prisma.group.create({
-          data: {
-            sessionId,
-            label,
-            color,
-            positionX: 0,
-            positionY: 0
-          }
-        });
 
-        // If responseIds provided, assign them to this group
-        if (responseIds && responseIds.length > 0) {
-          await prisma.response.updateMany({
-            where: {
-              id: { in: responseIds },
-              sessionId
-            },
-            data: {
-              groupId: group.id
-            }
-          });
-        }
 
-        // Fetch the complete group with responses
-        const completeGroup = await prisma.group.findUnique({
-          where: { id: group.id },
-          include: {
-            responses: {
-              include: {
-                participant: {
-                  select: { displayName: true, avatarId: true }
-                }
-              }
-            }
-          }
-        });
-
-        io.to(`session:${sessionId}`).emit('group_created', completeGroup);
-
-      } catch (error) {
-        console.error('Create group error:', error);
-        console.error('Error stack:', error?.stack);
-        console.error('Error details:', {
-          name: error?.name,
-          message: error?.message,
-          code: error?.code
-        });
-        
-        if (error instanceof z.ZodError) {
-          socket.emit('error', { message: `Invalid group data: ${error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}` });
-        } else {
-          socket.emit('error', { message: `Failed to create group: ${error?.message || 'Unknown error'}` });
-        }
-      }
-    });
-
-    socket.on('update_group', async (data) => {
-      try {
-        const { groupId, label } = z.object({
-          groupId: z.string().uuid(),
-          label: z.string().min(1).max(100)
-        }).parse(data);
-
-        const updatedGroup = await prisma.group.update({
-          where: { id: groupId },
-          data: { label },
-          include: {
-            responses: {
-              include: {
-                participant: {
-                  select: { displayName: true, avatarId: true }
-                }
-              }
-            }
-          }
-        });
-
-        io.to(`session:${updatedGroup.sessionId}`).emit('group_updated', updatedGroup);
-
-      } catch (error) {
-        console.error('Update group error:', error);
-        socket.emit('error', { message: 'Failed to update group' });
-      }
-    });
-
-    socket.on('drag_response', async (data) => {
-      try {
-        const { sessionId, responseId, x, y, groupId } = dragResponseSchema.parse(data);
-
-        await prisma.response.update({
-          where: { id: responseId },
-          data: { 
-            positionX: x,
-            positionY: y,
-            groupId
-          }
-        });
-
-        // Get the response to include participant info
-        const response = await prisma.response.findUnique({
-          where: { id: responseId },
-          include: { participant: true }
-        });
-
-        io.to(`session:${sessionId}`).emit('response_dragged', {
-          responseId,
-          x,
-          y,
-          groupId,
-          participantId: response?.participantId
-        });
-
-      } catch (error) {
-        console.error('Drag response error:', error);
-        socket.emit('error', { message: 'Failed to move response' });
-      }
-    });
-
-    socket.on('ungroup_response', async (data) => {
-      try {
-        const { responseId, sessionId } = z.object({
-          responseId: z.string().uuid(),
-          sessionId: z.string().uuid()
-        }).parse(data);
-
-        // Remove the response from its group
-        await prisma.response.update({
-          where: { id: responseId },
-          data: { groupId: null }
-        });
-
-        io.to(`session:${sessionId}`).emit('response_ungrouped', { responseId });
-
-      } catch (error) {
-        console.error('Ungroup response error:', error);
-        socket.emit('error', { message: 'Failed to ungroup response' });
-      }
-    });
 
     socket.on('cast_vote', async (data) => {
       try {
