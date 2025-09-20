@@ -382,8 +382,68 @@ export function setupSocketHandlers(
 
         let actualGroupId = groupId;
 
+        // Handle connected response voting by creating a group for connected responses
+        if (groupId.startsWith('connected-')) {
+          const responseIds = groupId.replace('connected-', '').split('-');
+          
+          // Check if we already have a group for these connected responses
+          let existingGroup = await prisma.group.findFirst({
+            where: {
+              sessionId,
+              responses: {
+                some: {
+                  id: { in: responseIds },
+                  groupId: { not: null }
+                }
+              }
+            }
+          });
+
+          if (!existingGroup) {
+            // Get all the connected responses to create a group for them
+            const responses = await prisma.response.findMany({
+              where: { 
+                id: { in: responseIds },
+                sessionId 
+              },
+              include: { participant: true }
+            });
+
+            if (responses.length === 0) {
+              socket.emit('error', { message: 'Connected responses not found' });
+              return;
+            }
+
+            // Create a group label from all response contents
+            const groupLabel = responses
+              .map(r => r.content.length > 20 ? r.content.substring(0, 20) + '...' : r.content)
+              .join(' • ');
+
+            // Create a group for these connected responses
+            const newGroup = await prisma.group.create({
+              data: {
+                sessionId,
+                label: groupLabel.length > 80 ? groupLabel.substring(0, 80) + '...' : groupLabel,
+                color: responses[0].category === 'WENT_WELL' ? '#10b981' : '#ef4444',
+                positionX: responses[0].positionX || 0,
+                positionY: responses[0].positionY || 0
+              }
+            });
+
+            // Assign all connected responses to this group
+            await prisma.response.updateMany({
+              where: { id: { in: responseIds } },
+              data: { groupId: newGroup.id }
+            });
+
+            actualGroupId = newGroup.id;
+            existingGroup = newGroup;
+          } else {
+            actualGroupId = existingGroup.id;
+          }
+        }
         // Handle individual response voting by creating a group for it
-        if (groupId.startsWith('individual-')) {
+        else if (groupId.startsWith('individual-')) {
           const responseId = groupId.replace('individual-', '');
           
           // Check if we already have a group for this individual response
