@@ -475,9 +475,34 @@ export function setupSocketHandlers(
           data: { voteCount: totalGroupVotes }
         });
 
+        // Calculate individual participant voting progress for host visibility
+        const allParticipantVotes = await prisma.vote.findMany({
+          where: { sessionId },
+          include: {
+            participant: {
+              select: { id: true, displayName: true, avatarId: true, isHost: true }
+            }
+          }
+        });
+
+        // Group votes by participant and calculate remaining votes
+        const participantProgress = new Map<string, number>();
+        const allParticipants = await prisma.participant.findMany({
+          where: { sessionId },
+          select: { id: true, displayName: true, avatarId: true, isHost: true }
+        });
+
+        allParticipants.forEach(p => {
+          const participantVotes = allParticipantVotes.filter(vote => vote.participantId === p.id);
+          const totalUsedVotes = participantVotes.reduce((sum, vote) => sum + vote.voteCount, 0);
+          const remainingVotes = 4 - totalUsedVotes;
+          participantProgress.set(p.id, remainingVotes);
+        });
+
         io.to(`session:${sessionId}`).emit('votes_updated', {
           groupId: groupId, // Send back the original groupId (might be virtual)
-          totalVotes: totalGroupVotes
+          totalVotes: totalGroupVotes,
+          participantProgress: Object.fromEntries(participantProgress) // Convert Map to object for JSON
         });
 
         async function getExistingVoteCount(participantId: string, groupId: string): Promise<number> {
