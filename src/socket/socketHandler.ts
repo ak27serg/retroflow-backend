@@ -378,11 +378,18 @@ export function setupSocketHandlers(
           }
         });
 
+        // Get the response to include participant info
+        const response = await prisma.response.findUnique({
+          where: { id: responseId },
+          include: { participant: true }
+        });
+
         io.to(`session:${sessionId}`).emit('response_dragged', {
           responseId,
           x,
           y,
-          groupId
+          groupId,
+          participantId: response?.participantId
         });
 
       } catch (error) {
