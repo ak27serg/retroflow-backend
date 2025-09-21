@@ -64,11 +64,15 @@ async function startServer() {
     }));
 
     const limiter = rateLimit({
-      windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
-      max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
+      windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'), // 1 minute
+      max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000'), // 1000 requests per minute
       message: 'Too many requests from this IP, please try again later.',
       standardHeaders: true,
       legacyHeaders: false,
+      // Skip rate limiting for health checks and static assets
+      skip: (req) => {
+        return req.path === '/health' || req.path.startsWith('/static');
+      }
     });
     app.use(limiter);
 
