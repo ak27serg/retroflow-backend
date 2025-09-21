@@ -386,31 +386,33 @@ export function setupSocketHandlers(
         if (groupId.startsWith('connected-')) {
           const responseIds = groupId.replace('connected-', '').split('-');
           
-          // Check if we already have a group for these connected responses
-          let existingGroup = await prisma.group.findFirst({
+          // First, check if any of these responses are already grouped
+          const existingGroupedResponses = await prisma.response.findMany({
             where: {
+              id: { in: responseIds },
               sessionId,
-              responses: {
-                some: {
-                  id: { in: responseIds },
-                  groupId: { not: null }
-                }
-              }
-            }
+              groupId: { not: null }
+            },
+            include: { group: true }
           });
 
-          if (!existingGroup) {
+          if (existingGroupedResponses.length > 0) {
+            // Use the existing group from the first grouped response
+            actualGroupId = existingGroupedResponses[0].groupId!;
+            console.log(`Using existing group ${actualGroupId} for connected responses`);
+          } else {
             // Get all the connected responses to create a group for them
             const responses = await prisma.response.findMany({
               where: { 
                 id: { in: responseIds },
-                sessionId 
+                sessionId,
+                groupId: null // Only get ungrouped responses
               },
               include: { participant: true }
             });
 
             if (responses.length === 0) {
-              socket.emit('error', { message: 'Connected responses not found' });
+              socket.emit('error', { message: 'Connected responses not found or already grouped' });
               return;
             }
 
@@ -438,8 +440,12 @@ export function setupSocketHandlers(
 
             actualGroupId = newGroup.id;
             existingGroup = newGroup;
-          } else {
-            actualGroupId = existingGroup.id;
+            
+            // Emit event to refresh session data for all participants
+            io.to(`session:${sessionId}`).emit('connected_group_created', {
+              groupId: newGroup.id,
+              responseIds
+            });
           }
         }
         // Handle individual response voting by creating a group for it
@@ -492,6 +498,12 @@ export function setupSocketHandlers(
 
             actualGroupId = newGroup.id;
             existingGroup = newGroup;
+            
+            // Emit event to refresh session data for all participants
+            io.to(`session:${sessionId}`).emit('connected_group_created', {
+              groupId: newGroup.id,
+              responseIds: [responseId]
+            });
           } else {
             actualGroupId = existingGroup.id;
           }
