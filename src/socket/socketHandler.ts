@@ -439,7 +439,6 @@ export function setupSocketHandlers(
             });
 
             actualGroupId = newGroup.id;
-            existingGroup = newGroup;
             
             // Emit event to refresh session data for all participants
             io.to(`session:${sessionId}`).emit('connected_group_created', {
@@ -497,7 +496,6 @@ export function setupSocketHandlers(
             });
 
             actualGroupId = newGroup.id;
-            existingGroup = newGroup;
             
             // Emit event to refresh session data for all participants
             io.to(`session:${sessionId}`).emit('connected_group_created', {
