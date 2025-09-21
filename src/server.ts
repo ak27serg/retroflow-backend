@@ -49,6 +49,9 @@ async function startServer() {
       prefix: "retroflow:",
     });
 
+    // Trust proxy headers when running behind Railway's load balancer
+    app.set('trust proxy', true);
+
     app.use(helmet({
       contentSecurityPolicy: false,
     }));
