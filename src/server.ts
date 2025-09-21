@@ -63,18 +63,24 @@ async function startServer() {
       credentials: true
     }));
 
-    const limiter = rateLimit({
-      windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'), // 1 minute
-      max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000'), // 1000 requests per minute
-      message: 'Too many requests from this IP, please try again later.',
-      standardHeaders: true,
-      legacyHeaders: false,
-      // Skip rate limiting for health checks and static assets
-      skip: (req) => {
-        return req.path === '/health' || req.path.startsWith('/static');
-      }
-    });
-    app.use(limiter);
+    // Temporarily disable rate limiting for development
+    if (process.env.NODE_ENV === 'production' && process.env.ENABLE_RATE_LIMITING === 'true') {
+      const limiter = rateLimit({
+        windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'), // 1 minute
+        max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000'), // 1000 requests per minute
+        message: 'Too many requests from this IP, please try again later.',
+        standardHeaders: true,
+        legacyHeaders: false,
+        // Skip rate limiting for health checks and static assets
+        skip: (req) => {
+          return req.path === '/health' || req.path.startsWith('/static');
+        }
+      });
+      app.use(limiter);
+      console.log('✅ Rate limiting enabled');
+    } else {
+      console.log('⚠️ Rate limiting disabled');
+    }
 
     app.use(session({
       store: redisStore,
