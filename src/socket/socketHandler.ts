@@ -384,7 +384,21 @@ export function setupSocketHandlers(
 
         // Handle connected response voting by creating a group for connected responses
         if (groupId.startsWith('connected-')) {
-          const responseIds = groupId.replace('connected-', '').split('-');
+          console.log('Processing connected group vote:', groupId);
+          
+          // Extract response IDs - they are UUIDs separated by double dashes
+          // Format: connected-uuid1--uuid2--uuid3
+          const idsString = groupId.replace('connected-', '');
+          const responseIds = idsString.split('--');
+          
+          console.log('Parsed response IDs from connected group:', responseIds);
+          
+          // Validate that we have valid UUIDs
+          if (responseIds.length === 0 || responseIds.some(id => !id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i))) {
+            console.error('Invalid response IDs in connected group:', responseIds);
+            socket.emit('error', { message: 'Invalid connected group format' });
+            return;
+          }
           
           // First, check if any of these responses are already grouped
           const existingGroupedResponses = await prisma.response.findMany({
@@ -412,14 +426,19 @@ export function setupSocketHandlers(
             });
 
             if (responses.length === 0) {
+              console.error('No valid responses found for connected group:', responseIds);
               socket.emit('error', { message: 'Connected responses not found or already grouped' });
               return;
             }
+
+            console.log(`Found ${responses.length} responses for connected group:`, responses.map(r => ({ id: r.id, content: r.content.substring(0, 30) })));
 
             // Create a group label from all response contents
             const groupLabel = responses
               .map(r => r.content.length > 20 ? r.content.substring(0, 20) + '...' : r.content)
               .join(' • ');
+
+            console.log('Creating group with label:', groupLabel);
 
             // Create a group for these connected responses
             const newGroup = await prisma.group.create({
@@ -431,6 +450,8 @@ export function setupSocketHandlers(
                 positionY: responses[0].positionY || 0
               }
             });
+
+            console.log('Created group successfully:', newGroup.id);
 
             // Assign all connected responses to this group
             await prisma.response.updateMany({
