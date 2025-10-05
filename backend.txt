@@ -1,0 +1,215 @@
+# RetroFlow Backend Development Log
+
+## Overview
+RetroFlow backend is built with Node.js, Express, Prisma ORM, and PostgreSQL. It provides real-time functionality through Socket.IO and manages retrospective session data.
+
+## Key Features Implemented
+
+### 1. Connected Group Voting System
+**Purpose**: Handle voting on connected card groups created in the frontend.
+
+**Implementation**: `src/socket/socketHandler.ts` - `cast_vote` handler (lines 385-589)
+
+**Connected Group ID Parsing**:
+- **Fixed Critical Bug**: Changed from single-dash to double-dash separator
+- **Format**: `connected-uuid1--uuid2--uuid3` (prevents UUID collision issues)
+- **Parsing Logic**: `groupId.replace('connected-', '').split('--')`
+- **Validation**: UUID format validation with regex pattern
+- **Error Handling**: Comprehensive logging and error responses
+
+**Group Creation Logic**:
+```typescript
+// When voting on connected group for first time:
+1. Parse response IDs from connected group ID
+2. Check if any responses already grouped
+3. If not, create new database group
+4. Assign all connected responses to the group
+5. Emit connected_group_created event for session refresh
+```
+
+**Database Operations**:
+- Creates real `Group` entities for connected responses
+- Updates `Response.groupId` to link responses to groups
+- Maintains vote counts in `Group.voteCount`
+- Handles both first-time and subsequent votes on same connected group
+
+### 2. Individual Response Voting
+**Purpose**: Handle voting on individual (non-connected) cards.
+
+**Implementation**: Same `cast_vote` handler
+- Creates database groups for individual responses when voted on
+- Uses `individual-{responseId}` format for group IDs
+- Converts virtual frontend groups to real database groups
+- Maintains consistency between frontend and backend group representation
+
+### 3. Connection Management System
+**Purpose**: Store and manage card connections for grouping phase.
+
+**Database Schema**: `prisma/schema.prisma`
+```prisma
+model Connection {
+  id               String   @id @default(cuid())
+  sessionId        String   @map("session_id")
+  fromResponseId   String   @map("from_response_id")  
+  toResponseId     String   @map("to_response_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  // Relations and constraints
+}
+```
+
+**Socket Handlers**:
+- `create_connection`: Validates responses exist, prevents duplicates
+- `remove_connection`: Removes connection and broadcasts to all participants
+- Real-time updates via `connection_created` and `connection_removed` events
+
+### 4. Voting Progress Tracking
+**Purpose**: Provide real-time voting progress for host visibility.
+
+**Implementation**: `cast_vote` handler
+- Calculates remaining votes per participant after each vote
+- Aggregates vote counts across all groups for each participant
+- Broadcasts progress via `votes_updated` event with `participantProgress` data
+- Host receives Map of `participantId -> remainingVotes`
+
+### 5. Session Phase Management
+**Purpose**: Control session phases with proper timer management.
+
+**Implementation**: `change_phase` handler (lines 122-164)
+- **Timer Authority**: Server calculates and stores `timerEndTime`
+- **Phase Transitions**: Validates host permissions
+- **Timer Options**: 
+  - `timerDuration`: Set new timer
+  - `stopTimer`: Explicitly stop timer
+  - Default: Keep existing timer
+
+**Timer Security**:
+- Backend calculates: `new Date(Date.now() + timerDuration * 1000)`
+- Client cannot manipulate timer end time
+- Database stores authoritative `timerEndTime`
+
+### 6. Presentation Mode
+**Purpose**: Synchronized presentation control across all participants.
+
+**Socket Handlers**:
+- `start_presentation`: Host-only, broadcasts to all participants
+- `end_presentation`: Host-only, ends presentation for everyone  
+- `navigate_presentation`: Host controls navigation, syncs all participants
+- All events include proper host authorization checks
+
+### 7. Real-time Communication
+**Purpose**: WebSocket-based real-time updates for collaborative features.
+
+**Socket Events Implemented**:
+- `join_session`: Participant authentication and room joining
+- `votes_updated`: Real-time vote count and progress updates
+- `connected_group_created`: Notifies when new groups are created from voting
+- `presentation_started/ended/navigate`: Presentation mode synchronization
+- `connection_created/removed`: Real-time connection line updates
+
+### 8. Database Schema
+
+**Key Models**:
+```prisma
+model Session {
+  timerDuration Int           @default(600)
+  timerEndTime  DateTime?     
+  // Other session fields...
+}
+
+model Response {
+  groupId       String?       // Links to Group when voted on
+  positionX     Float?        // For connection positioning
+  positionY     Float?
+  // Other response fields...
+}
+
+model Group {
+  voteCount     Int           @default(0)
+  responses     Response[]    // One-to-many relationship
+  // Other group fields...
+}
+
+model Vote {
+  participantId String
+  groupId       String
+  voteCount     Int
+  @@unique([participantId, groupId]) // Prevent duplicate votes
+}
+
+model Connection {
+  fromResponseId String
+  toResponseId   String
+  // Bidirectional connection tracking
+}
+```
+
+### 9. Error Handling & Logging
+**Implementation**: Throughout socket handlers
+- Comprehensive console logging for debugging
+- Proper error responses to clients
+- Input validation with Zod schemas
+- Database error handling with rollback scenarios
+
+**Connected Group Specific Logging**:
+```typescript
+console.log('Processing connected group vote:', groupId);
+console.log('Parsed response IDs from connected group:', responseIds);
+console.log('Found N responses for connected group:', responses.length);
+console.log('Created group successfully:', newGroup.id);
+```
+
+### 10. Vote Calculation & Aggregation
+**Purpose**: Accurate vote counting and participant progress tracking.
+
+**Implementation**:
+- **Individual Vote Tracking**: `participantId_groupId` unique constraint
+- **Group Vote Totals**: Aggregated from all participant votes on group
+- **Progress Calculation**: 4 total votes per participant, tracked across all groups
+- **Real-time Updates**: Immediate broadcast of vote changes to all participants
+
+## Technical Architecture
+
+### Socket.IO Configuration
+- Redis integration for session management
+- Room-based communication (`session:${sessionId}`)
+- Participant authentication via `socketId` mapping
+- Automatic cleanup on disconnect
+
+### Database Layer
+- Prisma ORM with PostgreSQL
+- Connection pooling and transaction support
+- Proper foreign key relationships
+- Indexed queries for performance
+
+### Validation Layer
+- Zod schemas for all socket event data
+- Input sanitization and type checking
+- UUID validation for connected group parsing
+- Host authorization for sensitive operations
+
+## Current State
+- ✅ Connected group voting fully functional
+- ✅ Real-time synchronization working
+- ✅ Proper error handling and logging
+- ✅ Secure timer implementation
+- ✅ Scalable database schema
+- ✅ Comprehensive vote tracking
+
+## Dependencies
+- Node.js with Express
+- Prisma ORM ^5.22.0
+- PostgreSQL database
+- Socket.IO ^4.x
+- Redis for session management
+- Zod for validation
+- TypeScript support
+
+## Known Issues
+None currently identified. All major features working as expected.
+
+## Security Features
+- Server-authoritative timer system
+- Host-only privileged operations
+- Input validation on all endpoints
+- Participant authentication via socket mapping
+- UUID validation for group ID parsing
