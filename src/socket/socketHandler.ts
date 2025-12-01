@@ -473,7 +473,7 @@ export function setupSocketHandlers(
           const responseId = groupId.replace('individual-', '');
           
           // Check if we already have a group for this individual response
-          let existingGroup = await prisma.group.findFirst({
+          const existingGroup = await prisma.group.findFirst({
             where: {
               sessionId,
               responses: {
