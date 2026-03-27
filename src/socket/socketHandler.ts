@@ -41,6 +41,14 @@ const removeConnectionSchema = z.object({
   connectionId: z.string().uuid(),
 });
 
+const dragResponseSchema = z.object({
+  sessionId: z.string().uuid(),
+  responseId: z.string().uuid(),
+  x: z.number(),
+  y: z.number(),
+  isDragging: z.boolean(),
+});
+
 const presentationSchema = z.object({
   sessionId: z.string().uuid(),
 });
@@ -373,6 +381,29 @@ export function setupSocketHandlers(
       } catch (error) {
         console.error('Remove connection error:', error);
         socket.emit('error', { message: 'Failed to remove connection' });
+      }
+    });
+
+    socket.on('drag_response', async (data) => {
+      try {
+        const { sessionId, responseId, x, y, isDragging } = dragResponseSchema.parse(data);
+
+        // Persist to DB only on drop to avoid write-storm during drag
+        if (!isDragging) {
+          await prisma.response.update({
+            where: { id: responseId },
+            data: { positionX: Math.round(x), positionY: Math.round(y) }
+          });
+        }
+
+        // Broadcast live position to all OTHER participants (sender updates locally)
+        socket.to(`session:${sessionId}`).emit('card_moved', {
+          responseId,
+          x: Math.round(x),
+          y: Math.round(y),
+        });
+      } catch (error) {
+        console.error('Drag response error:', error);
       }
     });
 
