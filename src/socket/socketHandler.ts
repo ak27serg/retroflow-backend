@@ -49,6 +49,36 @@ const dragResponseSchema = z.object({
   isDragging: z.boolean(),
 });
 
+const lockCardsSchema = z.object({
+  sessionId: z.string().uuid(),
+  cardIds: z.array(z.string().uuid()).min(1).max(50),
+});
+
+const unlockCardsSchema = z.object({
+  sessionId: z.string().uuid(),
+  cardIds: z.array(z.string().uuid()).min(1).max(50),
+});
+
+const groupCardsSchema = z.object({
+  sessionId: z.string().uuid(),
+  cardId1: z.string().uuid(),
+  cardId2: z.string().uuid(),
+});
+
+const ungroupCardSchema = z.object({
+  sessionId: z.string().uuid(),
+  cardId: z.string().uuid(),
+});
+
+const dragGroupSchema = z.object({
+  sessionId: z.string().uuid(),
+  positions: z.record(z.object({ x: z.number(), y: z.number() })).refine(
+    val => Object.keys(val).length <= 50,
+    { message: 'Too many positions' }
+  ),
+  isDragging: z.boolean(),
+});
+
 const presentationSchema = z.object({
   sessionId: z.string().uuid(),
 });
@@ -58,9 +88,13 @@ const navigatePresentationSchema = z.object({
   itemIndex: z.number().int().min(0),
 });
 
+// In-memory card lock registry: cardId → socketId that holds the lock.
+// Node.js single-threaded event loop guarantees atomic check-and-set — no race conditions.
+const cardLocks = new Map<string, string>();
+
 export function setupSocketHandlers(
-  io: Server, 
-  prisma: PrismaClient, 
+  io: Server,
+  prisma: PrismaClient,
   redis: any
 ) {
   io.on('connection', (socket: Socket) => {
@@ -407,6 +441,156 @@ export function setupSocketHandlers(
       }
     });
 
+    // ─── Card locking (mutual exclusion for dragging) ─────────────────────────
+
+    socket.on('lock_cards', (data) => {
+      try {
+        const { sessionId, cardIds } = lockCardsSchema.parse(data);
+
+        // First-claim-wins: reject if any card is already locked by someone else
+        const conflicting = cardIds.filter(id => {
+          const owner = cardLocks.get(id);
+          return owner !== undefined && owner !== socket.id;
+        });
+
+        if (conflicting.length > 0) {
+          socket.emit('lock_rejected', { cardIds: conflicting });
+          return;
+        }
+
+        cardIds.forEach(id => cardLocks.set(id, socket.id));
+
+        // Notify all OTHER participants — sender already knows they're dragging
+        socket.to(`session:${sessionId}`).emit('cards_locked', { cardIds });
+      } catch (error) {
+        console.error('Lock cards error:', error);
+      }
+    });
+
+    socket.on('unlock_cards', (data) => {
+      try {
+        const { sessionId, cardIds } = unlockCardsSchema.parse(data);
+
+        const freed: string[] = [];
+        cardIds.forEach(id => {
+          if (cardLocks.get(id) === socket.id) {
+            cardLocks.delete(id);
+            freed.push(id);
+          }
+        });
+
+        if (freed.length > 0) {
+          // Notify all in room so every client updates lock state consistently
+          io.to(`session:${sessionId}`).emit('cards_unlocked', { cardIds: freed });
+        }
+      } catch (error) {
+        console.error('Unlock cards error:', error);
+      }
+    });
+
+    // ─── Group management ──────────────────────────────────────────────────────
+
+    socket.on('group_cards', async (data) => {
+      try {
+        const { sessionId, cardId1, cardId2 } = groupCardsSchema.parse(data);
+
+        if (cardId1 === cardId2) return;
+
+        const [r1, r2] = await Promise.all([
+          prisma.response.findFirst({ where: { id: cardId1, sessionId } }),
+          prisma.response.findFirst({ where: { id: cardId2, sessionId } }),
+        ]);
+
+        if (!r1 || !r2) return;
+
+        let targetGroupId: string;
+
+        if (r1.groupId && r2.groupId) {
+          if (r1.groupId === r2.groupId) return; // already the same group
+          // Merge r2's group into r1's group, then delete r2's group
+          await prisma.response.updateMany({
+            where: { groupId: r2.groupId, sessionId },
+            data: { groupId: r1.groupId },
+          });
+          await prisma.group.delete({ where: { id: r2.groupId } });
+          targetGroupId = r1.groupId;
+        } else if (r1.groupId) {
+          await prisma.response.update({ where: { id: cardId2 }, data: { groupId: r1.groupId } });
+          targetGroupId = r1.groupId;
+        } else if (r2.groupId) {
+          await prisma.response.update({ where: { id: cardId1 }, data: { groupId: r2.groupId } });
+          targetGroupId = r2.groupId;
+        } else {
+          const newGroup = await prisma.group.create({ data: { sessionId, color: '#3B82F6' } });
+          await prisma.response.updateMany({
+            where: { id: { in: [cardId1, cardId2] } },
+            data: { groupId: newGroup.id },
+          });
+          targetGroupId = newGroup.id;
+        }
+
+        const grouped = await prisma.response.findMany({
+          where: { groupId: targetGroupId, sessionId },
+          select: { id: true },
+        });
+
+        io.to(`session:${sessionId}`).emit('cards_grouped', {
+          groupId: targetGroupId,
+          cardIds: grouped.map(r => r.id),
+        });
+      } catch (error) {
+        console.error('Group cards error:', error);
+      }
+    });
+
+    socket.on('ungroup_card', async (data) => {
+      try {
+        const { sessionId, cardId } = ungroupCardSchema.parse(data);
+
+        const response = await prisma.response.findFirst({ where: { id: cardId, sessionId } });
+        if (!response?.groupId) return;
+
+        const groupId = response.groupId;
+
+        await prisma.response.update({ where: { id: cardId }, data: { groupId: null } });
+
+        const remainingCount = await prisma.response.count({ where: { groupId, sessionId } });
+
+        if (remainingCount <= 1) {
+          // Dissolve: detach last member and delete the group
+          await prisma.response.updateMany({ where: { groupId, sessionId }, data: { groupId: null } });
+          await prisma.group.delete({ where: { id: groupId } });
+          io.to(`session:${sessionId}`).emit('group_dissolved', { groupId });
+        } else {
+          io.to(`session:${sessionId}`).emit('card_ungrouped', { cardId, groupId });
+        }
+      } catch (error) {
+        console.error('Ungroup card error:', error);
+      }
+    });
+
+    socket.on('drag_group', async (data) => {
+      try {
+        const { sessionId, positions, isDragging } = dragGroupSchema.parse(data);
+
+        if (!isDragging) {
+          // Batch-persist all final positions in one transaction on drop
+          await prisma.$transaction(
+            Object.entries(positions).map(([responseId, pos]) =>
+              prisma.response.updateMany({
+                where: { id: responseId, sessionId },
+                data: { positionX: Math.round(pos.x), positionY: Math.round(pos.y) },
+              })
+            )
+          );
+        }
+
+        socket.to(`session:${sessionId}`).emit('group_moved', { positions });
+      } catch (error) {
+        console.error('Drag group error:', error);
+      }
+    });
+
     socket.on('cast_vote', async (data) => {
       try {
         const { sessionId, participantId, groupId, voteCount } = voteSchema.parse(data);
@@ -740,6 +924,18 @@ export function setupSocketHandlers(
 
           await redis.del(`participant:${participant.id}`);
           await redis.del(`typing:${participant.sessionId}:${participant.id}`);
+
+          // Release all card locks held by this socket
+          const freedCards: string[] = [];
+          for (const [cardId, socketId] of cardLocks.entries()) {
+            if (socketId === socket.id) {
+              cardLocks.delete(cardId);
+              freedCards.push(cardId);
+            }
+          }
+          if (freedCards.length > 0) {
+            socket.to(`session:${participant.sessionId}`).emit('cards_unlocked', { cardIds: freedCards });
+          }
         }
 
       } catch (error) {
