@@ -79,6 +79,12 @@ const dragGroupSchema = z.object({
   isDragging: z.boolean(),
 });
 
+const renameGroupSchema = z.object({
+  sessionId: z.string().uuid(),
+  groupId: z.string().uuid(),
+  label: z.string().max(100),
+});
+
 const presentationSchema = z.object({
   sessionId: z.string().uuid(),
 });
@@ -588,6 +594,20 @@ export function setupSocketHandlers(
         socket.to(`session:${sessionId}`).emit('group_moved', { positions });
       } catch (error) {
         console.error('Drag group error:', error);
+      }
+    });
+
+    socket.on('rename_group', async (data) => {
+      try {
+        const { sessionId, groupId, label } = renameGroupSchema.parse(data);
+        const trimmed = label.trim() || null;
+        await prisma.group.updateMany({
+          where: { id: groupId, sessionId },
+          data: { label: trimmed },
+        });
+        io.to(`session:${sessionId}`).emit('group_renamed', { groupId, label: trimmed });
+      } catch (error) {
+        console.error('Rename group error:', error);
       }
     });
 
